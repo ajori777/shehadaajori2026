@@ -115,13 +115,7 @@ class StudentApp:
                             webbrowser.open(download_link)
                         else:
                             messagebox.showinfo("تنبيه", "يرجى تحميل النسخة الجديدة من الرابط المعتمد لإكمال العمل.")
-                        return False
-                    else:
-                        # User refused mandatory update
-                        return False
-                    return True # No update or server error
-                        # User refused mandatory update
-                        return False
+                    return False # Mandatory update: stop execution regardless
             return True # No update or server error
         except:
             # If no internet or drive is down, allow usage for now
