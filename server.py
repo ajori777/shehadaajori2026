@@ -11,12 +11,26 @@ app = FastAPI()
 async def health_check():
     return {"status": "online", "message": "Student Certificate API is running"}
 
-# Firebase Setup
-if not firebase_admin._apps:
-    cred = credentials.Certificate("serviceAccountKey.json")
-    firebase_admin.initialize_app(cred)
+# Firebase Setup (Lazy Load)
+db = None
+def get_db():
+    global db
+    if db is None:
+        try:
+            if not firebase_admin._apps:
+                cred = credentials.Certificate("serviceAccountKey.json")
+                firebase_admin.initialize_app(cred)
+            db = firestore.client()
+        except Exception as e:
+            print(f"Firebase Init Error: {e}")
+            return None
+    return db
 
-db = firestore.client()
+@app.get("/")
+async def health_check():
+    status = "online"
+    db_status = "connected" if get_db() is not None else "firebase_error"
+    return {"status": status, "db": db_status, "message": "Student Certificate API is running"}
 
 class ActivationRequest(BaseModel):
     code: str
@@ -25,9 +39,12 @@ class ActivationRequest(BaseModel):
 
 @app.post("/activate")
 async def activate(req: ActivationRequest):
-    # Use certificates_licenses collection
-    doc_ref = db.collection("certificates_licenses").document(req.code)
+    database = get_db()
+    if not database: raise HTTPException(status_code=500, detail="خطأ في الاتصال بقاعدة البيانات")
+    
+    doc_ref = database.collection("certificates_licenses").document(req.code)
     doc = doc_ref.get()
+# ... (rest of the logic using database instead of db)
     
     if not doc.exists:
         raise HTTPException(status_code=404, detail="كود التفعيل غير موجود")
