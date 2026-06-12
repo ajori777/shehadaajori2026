@@ -1,0 +1,117 @@
+from fastapi import FastAPI, HTTPException, Body
+from pydantic import BaseModel
+import firebase_admin
+from firebase_admin import credentials, firestore
+import os
+from typing import Optional
+
+app = FastAPI()
+
+# Firebase Setup
+if not firebase_admin._apps:
+    cred = credentials.Certificate("serviceAccountKey.json")
+    firebase_admin.initialize_app(cred)
+
+db = firestore.client()
+
+class ActivationRequest(BaseModel):
+    code: str
+    name: str
+    hwid: str
+
+@app.post("/activate")
+async def activate(req: ActivationRequest):
+    # Use certificates_licenses collection
+    doc_ref = db.collection("certificates_licenses").document(req.code)
+    doc = doc_ref.get()
+    
+    if not doc.exists:
+        raise HTTPException(status_code=404, detail="كود التفعيل غير موجود")
+    
+    data = doc.to_dict()
+    
+    if data.get('Status') != 'active':
+        raise HTTPException(status_code=403, detail="هذا الكود محظور")
+    
+    # Check HWID
+    stored_hwid = data.get('MachineID')
+    if stored_hwid and stored_hwid != req.hwid:
+        raise HTTPException(status_code=403, detail="هذا الكود مرتبط بجهاز آخر")
+    
+    # Bind to this device if not bound
+    update_data = {}
+    if not stored_hwid:
+        update_data['MachineID'] = req.hwid
+        update_data['ActivationName'] = req.name
+    
+    if update_data:
+        doc_ref.update(update_data)
+        data.update(update_data)
+        
+    return {
+        "status": "active",
+        "Name": data.get('Name'),
+        "Max": data.get('Max', 0),
+        "Used": data.get('Used', 0)
+    }
+
+@app.get("/status/{hwid}")
+async def get_status(hwid: str):
+    docs = db.collection("certificates_licenses").where("MachineID", "==", hwid).limit(1).get()
+    if not docs:
+        raise HTTPException(status_code=404, detail="الجهاز غير مفعل")
+    
+    data = docs[0].to_dict()
+    if data.get('Status') != 'active':
+        return {"status": "blocked"}
+        
+    return {
+        "status": "active",
+        "Name": data.get('Name'),
+        "Max": data.get('Max', 0),
+        "Used": data.get('Used', 0)
+    }
+
+@app.get("/trial_status/{hwid}")
+async def get_trial_status(hwid: str):
+    doc_ref = db.collection("trial_users").document(hwid)
+    doc = doc_ref.get()
+    
+    if not doc.exists:
+        # First time trial user
+        doc_ref.set({"Used": 0, "FirstUsed": firestore.SERVER_TIMESTAMP})
+        return {"status": "allowed", "used": 0}
+    
+    data = doc.to_dict()
+    return {"status": "allowed", "used": data.get('Used', 0)}
+
+@app.post("/sync_trial")
+async def sync_trial(hwid: str = Body(...), count: int = Body(...)):
+    doc_ref = db.collection("trial_users").document(hwid)
+    doc = doc_ref.get()
+    
+    current_used = 0
+    if doc.exists:
+        current_used = doc.to_dict().get('Used', 0)
+    
+    new_used = current_used + count
+    doc_ref.set({"Used": new_used}, merge=True)
+    
+    return {"status": "success", "new_total": new_used}
+
+
+@app.post("/sync_usage")
+async def update_usage(hwid: str = Body(...), count: int = Body(...)):
+    docs = db.collection("certificates_licenses").where("MachineID", "==", hwid).limit(1).get()
+    if not docs:
+        raise HTTPException(status_code=404, detail="الجهاز غير مفعل")
+    
+    doc_ref = db.collection("certificates_licenses").document(docs[0].id)
+    current_used = docs[0].to_dict().get('Used', 0)
+    doc_ref.update({"Used": current_used + count})
+    
+    return {"status": "success", "new_total": current_used + count}
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)

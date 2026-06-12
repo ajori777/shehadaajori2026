@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.env
+config.json
+serviceAccountKey.json
+شهادات pdf/
+شهادات word/
+*.xlsx
+*.docx
+.vscode/
