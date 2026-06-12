@@ -7,6 +7,10 @@ from typing import Optional
 
 app = FastAPI()
 
+@app.get("/")
+async def health_check():
+    return {"status": "online", "message": "Student Certificate API is running"}
+
 # Firebase Setup
 if not firebase_admin._apps:
     cred = credentials.Certificate("serviceAccountKey.json")

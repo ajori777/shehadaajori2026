@@ -77,9 +77,9 @@ class StudentApp:
     def connection_heartbeat(self):
         while True:
             try:
-                # Use a simple health check or the status endpoint
-                response = requests.get(f"{self.render_base_url}/trial_status/health", timeout=45)
-                status = "connected" if response.status_code in [200, 404] else "error"
+                # Check root URL for health
+                response = requests.get(self.render_base_url, timeout=45)
+                status = "connected" if response.status_code == 200 else "error"
             except:
                 status = "disconnected"
             
