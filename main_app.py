@@ -46,7 +46,7 @@ class StudentApp:
         self.trial_per_file_limit = 5
         self.hwid = self.get_hwid()
         # IMPORTANT: Replace with your actual Render URL
-        self.render_base_url = "https://markbook-api.onrender.com" 
+        self.render_base_url = "https://shehadaajori2026-2.onrender.com" 
 
         # Load Config
         self.config_path = "config.json"
@@ -71,11 +71,36 @@ class StudentApp:
         
         # Check license status on startup
         threading.Thread(target=self.check_activation_on_startup, daemon=True).start()
+        # Start connection heartbeat
+        threading.Thread(target=self.connection_heartbeat, daemon=True).start()
+
+    def connection_heartbeat(self):
+        while True:
+            try:
+                # Use a simple health check or the status endpoint
+                response = requests.get(f"{self.render_base_url}/trial_status/health", timeout=45)
+                status = "connected" if response.status_code in [200, 404] else "error"
+            except:
+                status = "disconnected"
+            
+            self.root.after(0, lambda s=status: self.update_connection_ui(s))
+            import time
+            time.sleep(30) # Check every 30 seconds
+
+    def update_connection_ui(self, status):
+        if not hasattr(self, 'lbl_conn'):
+            self.lbl_conn = tk.Label(self.status_frame, text="● جاري الاتصال...", font=("Arial", 10, "bold"), bg="#f8f9fa")
+            self.lbl_conn.pack(side=tk.LEFT, padx=20)
+        
+        if status == "connected":
+            self.lbl_conn.config(text="● متصل بالسيرفر", fg="#27ae60")
+        else:
+            self.lbl_conn.config(text="○ غير متصل", fg="#e74c3c")
 
     def check_for_updates(self):
         try:
             # Try to fetch version from Google Drive (Direct Download Link)
-            response = requests.get(self.update_url, timeout=10)
+            response = requests.get(self.update_url, timeout=45)
             if response.status_code == 200:
                 content = response.text.strip().split('\n')
                 remote_version = content[0].strip()
@@ -94,6 +119,9 @@ class StudentApp:
                     else:
                         # User refused mandatory update
                         return False
+                    return True # No update or server error
+                        # User refused mandatory update
+                        return False
             return True # No update or server error
         except:
             # If no internet or drive is down, allow usage for now
@@ -109,25 +137,31 @@ class StudentApp:
             except: return "UNKNOWN_DEVICE"
 
     def check_activation_on_startup(self):
-        if not self.is_activated:
-            self.root.after(0, self.update_trial_status_ui)
-            return
-
+        # Always check server for activation status by HWID
         try:
-            response = requests.get(f"{self.render_base_url}/status/{self.hwid}", timeout=10)
+            response = requests.get(f"{self.render_base_url}/status/{self.hwid}", timeout=45)
             if response.status_code == 200:
                 data = response.json()
                 if data.get('status') == 'active':
                     self.is_activated = True
                     self.license_info = data
+                    self.save_config_to_file()
                 else:
                     self.is_activated = False
-            else:
-                # If server is down, we allow the stored activation for now but warn
-                # Or we can be strict. Let's be lenient for offline usage if previously activated.
-                pass 
-        except:
-            pass
+            elif response.status_code == 404:
+                try:
+                    trial_resp = requests.get(f"{self.render_base_url}/trial_status/{self.hwid}", timeout=45)
+                    if trial_resp.status_code == 200:
+                        t_data = trial_resp.json()
+                        server_used = t_data.get('used', 0)
+                        if server_used > self.total_trial_usage:
+                            self.total_trial_usage = server_used
+                            self.save_config_to_file()
+                except: pass
+                if self.is_activated:
+                    self.is_activated = False
+                    self.save_config_to_file()
+        except: pass
         self.root.after(0, self.update_trial_status_ui)
 
     def load_config(self):
