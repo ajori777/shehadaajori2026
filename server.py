@@ -7,30 +7,44 @@ from typing import Optional
 
 app = FastAPI()
 
-@app.get("/")
-async def health_check():
-    return {"status": "online", "message": "Student Certificate API is running"}
+_db = None
 
-# Firebase Setup (Lazy Load)
-db = None
 def get_db():
-    global db
-    if db is None:
+    global _db
+    if _db is None:
         try:
-            if not firebase_admin._apps:
-                cred = credentials.Certificate("serviceAccountKey.json")
-                firebase_admin.initialize_app(cred)
-            db = firestore.client()
+            try:
+                firebase_admin.get_app()
+            except ValueError:
+                # 1. Try environment variable (Safer for Render)
+                json_creds = os.environ.get("FIREBASE_CREDENTIALS")
+                if json_creds:
+                    import json
+                    creds_dict = json.loads(json_creds)
+                    cred = credentials.Certificate(creds_dict)
+                    firebase_admin.initialize_app(cred)
+                # 2. Try local file
+                elif os.path.exists("serviceAccountKey.json"):
+                    cred = credentials.Certificate("serviceAccountKey.json")
+                    firebase_admin.initialize_app(cred)
+                # 3. Default init
+                else:
+                    firebase_admin.initialize_app()
+            _db = firestore.client()
         except Exception as e:
             print(f"Firebase Init Error: {e}")
             return None
-    return db
+    return _db
 
 @app.get("/")
 async def health_check():
-    status = "online"
-    db_status = "connected" if get_db() is not None else "firebase_error"
-    return {"status": status, "db": db_status, "message": "Student Certificate API is running"}
+    database = get_db()
+    db_status = "connected" if database is not None else "firebase_error"
+    return {
+        "status": "online", 
+        "db": db_status, 
+        "message": "Student Certificate API is running"
+    }
 
 class ActivationRequest(BaseModel):
     code: str
@@ -42,9 +56,15 @@ async def activate(req: ActivationRequest):
     database = get_db()
     if not database: raise HTTPException(status_code=500, detail="خطأ في الاتصال بقاعدة البيانات")
     
-    doc_ref = database.collection("certificates_licenses").document(req.code)
+    code = req.code
+    doc_ref = database.collection("certificates_licenses").document(code)
     doc = doc_ref.get()
-# ... (rest of the logic using database instead of db)
+    
+    # محاولة إضافة حرف M إذا لم ينجح البحث الأول وكان الكود لا يبدأ به
+    if not doc.exists and not code.startswith('M'):
+        code = 'M' + code
+        doc_ref = database.collection("certificates_licenses").document(code)
+        doc = doc_ref.get()
     
     if not doc.exists:
         raise HTTPException(status_code=404, detail="كود التفعيل غير موجود")
@@ -78,7 +98,9 @@ async def activate(req: ActivationRequest):
 
 @app.get("/status/{hwid}")
 async def get_status(hwid: str):
-    docs = db.collection("certificates_licenses").where("MachineID", "==", hwid).limit(1).get()
+    database = get_db()
+    if not database: raise HTTPException(status_code=500, detail="خطأ في الاتصال بقاعدة البيانات")
+    docs = database.collection("certificates_licenses").where("MachineID", "==", hwid).limit(1).get()
     if not docs:
         raise HTTPException(status_code=404, detail="الجهاز غير مفعل")
     
@@ -95,7 +117,9 @@ async def get_status(hwid: str):
 
 @app.get("/trial_status/{hwid}")
 async def get_trial_status(hwid: str):
-    doc_ref = db.collection("trial_users").document(hwid)
+    database = get_db()
+    if not database: raise HTTPException(status_code=500, detail="خطأ في الاتصال بقاعدة البيانات")
+    doc_ref = database.collection("trial_users").document(hwid)
     doc = doc_ref.get()
     
     if not doc.exists:
@@ -108,7 +132,9 @@ async def get_trial_status(hwid: str):
 
 @app.post("/sync_trial")
 async def sync_trial(hwid: str = Body(...), count: int = Body(...)):
-    doc_ref = db.collection("trial_users").document(hwid)
+    database = get_db()
+    if not database: raise HTTPException(status_code=500, detail="خطأ في الاتصال بقاعدة البيانات")
+    doc_ref = database.collection("trial_users").document(hwid)
     doc = doc_ref.get()
     
     current_used = 0
@@ -123,11 +149,13 @@ async def sync_trial(hwid: str = Body(...), count: int = Body(...)):
 
 @app.post("/sync_usage")
 async def update_usage(hwid: str = Body(...), count: int = Body(...)):
-    docs = db.collection("certificates_licenses").where("MachineID", "==", hwid).limit(1).get()
+    database = get_db()
+    if not database: raise HTTPException(status_code=500, detail="خطأ في الاتصال بقاعدة البيانات")
+    docs = database.collection("certificates_licenses").where("MachineID", "==", hwid).limit(1).get()
     if not docs:
         raise HTTPException(status_code=404, detail="الجهاز غير مفعل")
     
-    doc_ref = db.collection("certificates_licenses").document(docs[0].id)
+    doc_ref = database.collection("certificates_licenses").document(docs[0].id)
     current_used = docs[0].to_dict().get('Used', 0)
     doc_ref.update({"Used": current_used + count})
     
